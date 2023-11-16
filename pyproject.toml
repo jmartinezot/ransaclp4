@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ransaclp"
+version = "0.0.1"
+authors = [
+  { name="José María Martínez Otzeta", email="jmartinezot@gmail.com" },
+]
+description = "RANSACLP"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/pypa/ransaclp"
+"Bug Tracker" = "https://github.com/pypa/ransaclp/issues"
+
+[tool.poetry.dependencies]
+sphinx-automodapi = "*"
