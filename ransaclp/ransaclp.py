@@ -9,6 +9,51 @@ import random
 from typing import Callable, List, Tuple, Union, Dict
 from numba import cuda
 
+def segment_plane(pcd: o3d.geometry.PointCloud, distance_threshold: float, num_iterations: int, 
+                  percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float  = 0.05, 
+                  use_cuda: bool = False, verbosity_level: int = 0, seed: int = None):
+    '''
+    Segments a plane from a point cloud.
+
+    :param pcd: The point cloud.
+    :type pcd: o3d.geometry.PointCloud
+    :param distance_threshold: The distance threshold.
+    :type distance_threshold: float
+    :param num_iterations: The number of iterations.
+    :type num_iterations: int
+    :return: The plane model and the inliers.
+    :rtype: Tuple[np.ndarray, np.ndarray]
+
+    :Example:
+
+    ::
+
+        >>> import open3d as o3d
+        >>> import ransaclp
+        >>> office_dataset = o3d.data.OfficePointClouds()
+        >>> office_filename = office_dataset.paths[0]
+        >>> pcd = o3d.io.read_point_cloud(office_filename)
+        >>> plane_model, inliers = ransaclp.segment_plane(pcd, distance_threshold=0.01, num_iterations=1000, percentage_chosen_lines = 0.2, percentage_chosen_planes = 0.05, seed = 42)
+        >>> plane_model
+        array([-0.07208637,  0.20357587, -0.97640177,  2.25114528])
+        >>> number_inliers = len(inliers)
+        >>> inlier_cloud = pcd.select_by_index(inliers)
+        >>> inlier_cloud.paint_uniform_color([1, 0, 0])
+        >>> o3d.visualization.draw_geometries([pcd, inlier_cloud], window_name="RANSACLP Inliers:  " + str(number_inliers))
+    '''
+    np_points = np.asarray(pcd.points)
+    ransaclp_best_data, ransaclp_full_data = get_ransaclp_data_from_np_points(np_points, ransac_iterations = num_iterations, 
+                                                           threshold = distance_threshold,
+                                                           use_cuda = use_cuda,
+                                                           percentage_chosen_lines = percentage_chosen_lines,
+                                                           percentage_chosen_planes = percentage_chosen_planes,
+                                                           verbosity_level = verbosity_level, 
+                                                           inherited_verbose_string = "",
+                                                           seed = seed)
+    ransaclp_plane = ransaclp_best_data["plane"]
+    indices_inliers = ransaclp_best_data["indices_inliers"]
+    return ransaclp_plane, indices_inliers
+
 def get_ransac_data_from_np_points(np_points: np.ndarray, ransac_iterator: Callable, ransac_iterations: int = 100, threshold: float = 0.1, 
                                   verbosity_level: int = 0, inherited_verbose_string: str = "",
                                   seed: int = None) -> Dict:
@@ -592,6 +637,7 @@ def get_n_percentile_from_list_sse_plane(list_sse_plane: List[Tuple[float, np.nd
     return filtered_pairs
 
 def get_ransaclp_data_from_filename(filename: str, ransac_iterations: int = 100, threshold: float = 0.1, audit_cloud: bool = False, 
+                                    percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float = 0.05,
                                     verbosity_level: int = 0, inherited_verbose_string: str = "", seed: int = None) -> Dict:
     '''
     Gets the ransaclp data from a file.
@@ -649,22 +695,24 @@ def get_ransaclp_data_from_filename(filename: str, ransac_iterations: int = 100,
     ransac_iterator = ransac.get_ransac_line_iteration_results
     ransac_data = get_ransac_data_from_filename(filename, ransac_iterator = ransac_iterator,
                                                 ransac_iterations = ransac_iterations,
-                                                threshold = threshold, audit_cloud=audit_cloud, verbosity_level = verbosity_level, 
+                                                threshold = threshold,
+                                                audit_cloud=audit_cloud, verbosity_level = verbosity_level, 
                                                 inherited_verbose_string=inherited_verbose_string, seed = seed)
     pcd = o3d.io.read_point_cloud(ransac_data["filename"])
     np_points = np.asarray(pcd.points)
 
     pair_lines_number_inliers = get_lines_and_number_inliers_from_ransac_data_from_file(ransac_data)
-    ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = 0.2, verbosity_level=verbosity_level,
+    ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = percentage_chosen_lines, verbosity_level=verbosity_level,
                                                         inherited_verbose_string=inherited_verbose_string)
-    list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = 5)
+    percentile = percentage_chosen_planes * 100,
+    list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = percentile)
     list_good_planes = [sse_plane[1] for sse_plane in list_sse_plane_05]
     results_from_best_plane = ransac.get_best_fitting_data_from_list_planes(np_points, list_good_planes, threshold)
     return results_from_best_plane
 
 # @profile
 def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: int = 100, threshold: float = 0.1,
-                                     cuda: bool = False, 
+                                     use_cuda: bool = False, percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float = 0.05,
                                     verbosity_level: int = 0, inherited_verbose_string: str = "", seed: int = None) -> Dict:
     '''
     Gets the ransaclp data from a file.
@@ -722,7 +770,7 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
     '''
     if seed is not None:
         np.random.seed(seed)
-    if cuda:
+    if use_cuda:
         ransac_iterator = ransaccuda.get_ransac_line_iteration_results_cuda
         ransac_data = get_ransac_data_from_np_points_cuda(np_points, ransac_iterator = ransac_iterator,
                                             ransac_iterations = ransac_iterations,
@@ -737,11 +785,12 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
                                                     verbosity_level = verbosity_level, 
                                                     inherited_verbose_string=inherited_verbose_string, seed = seed)
     pair_lines_number_inliers = get_lines_and_number_inliers_from_ransac_data_from_file(ransac_data)
-    ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = 0.2, verbosity_level=verbosity_level,
+    ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = percentage_chosen_lines, verbosity_level=verbosity_level,
                                                         inherited_verbose_string=inherited_verbose_string)
-    list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = 5)
+    percentile = percentage_chosen_planes * 100,
+    list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = percentile)
     list_good_planes = [sse_plane[1] for sse_plane in list_sse_plane_05]
-    if cuda: 
+    if use_cuda: 
         results_from_best_plane = ransaccuda.get_best_fitting_data_from_list_planes_cuda(np_points, list_good_planes, threshold)
     else:
         results_from_best_plane = ransac.get_best_fitting_data_from_list_planes(np_points, list_good_planes, threshold)

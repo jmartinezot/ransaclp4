@@ -49,6 +49,28 @@ df = df.loc[:,ordered_columns]
 # df = df.div(df["RANSAC-109"], axis=0)
 df = df.div(df["RANSAC-109"], axis=0)
 
+# Hardcoded sample data
+'''
+data = np.array([
+    [75.8, 79.4, 76.4, 77.9, 78.5, 76.2, 75.1, 78.4, 75.6, 70.3],
+    [8.7, 6.6, 9.8, 7.7, 7.2, 8.4, 5.9, 9.3, 8.1, 60.5],
+    [9.0, 5.4, 7.8, 6.8, 8.0, 7.5, 6.3, 9.1, 5.2, 70.6]
+]).T
+'''
+
+# Convert the numpy array into a DataFrame
+# df = pd.DataFrame(data, columns=["A", "B", "C"])
+
+# df = df.reset_index(drop=True)
+# df.to_csv('temp_data.csv', index=False)
+
+only_test_result = stats.friedmanTest(df)
+print(only_test_result)
+only_post_result = stats.friedmanPost(df)
+print(only_post_result)
+adjusted_p_values = stats.adjustShaffer(only_post_result)
+print(adjusted_p_values)
+
 # call the stats function to perform the Friedman test con Shaffer's post-hoc test
 test_results = stats.friedman_shaffer_scmamp(df)
 results_df = test_results["adjusted_pvalues"]

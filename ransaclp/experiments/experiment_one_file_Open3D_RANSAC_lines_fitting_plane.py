@@ -1,4 +1,4 @@
-import ransaclpexperiments as experiments
+import ransaclp.ransaclpexperiments as experiments
 import open3d as o3d
 
 dataset = o3d.data.OfficePointClouds()
