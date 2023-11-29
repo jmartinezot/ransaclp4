@@ -16,6 +16,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+  "open3d>=0.16.0",
+  "rsaitehu>=0.0.1",
+  "rsaitehu-ransaccuda>=0.0.1",
+
+]
 
 [project.urls]
 "Homepage" = "https://github.com/pypa/ransaclp"
