@@ -2,6 +2,9 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "ransaclp"
 version = "0.0.1"
@@ -20,7 +23,6 @@ dependencies = [
   "open3d>=0.16.0",
   "rsaitehu>=0.0.1",
   "rsaitehu-ransaccuda>=0.0.1",
-
 ]
 
 [project.urls]
@@ -29,3 +31,8 @@ dependencies = [
 
 [tool.poetry.dependencies]
 sphinx-automodapi = "*"
+
+[project.optional-dependencies]
+industrial_dataset = [
+  "lanverso-industrial-dataset-helper @ git+https://github.com/jonazpiazu/lanverso-industrial-dataset-release.git",
+]
