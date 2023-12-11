@@ -1,0 +1,57 @@
+import ransaclpexperiments as experiments
+import open3d as o3d
+import os
+import pickle as pkl
+import glob
+import psutil
+
+database_path = "/home/scpmaotj/Tecnalia_Lanverso_dataset/"
+ply_files = glob.glob(database_path + "/**/*.pcd", recursive=True)
+
+# check if a file has been modified in the last 24 hours
+def file_is_recent(filename):
+    import datetime
+    import os
+    if not os.path.exists(filename):
+        return False
+    now = datetime.datetime.now()
+    file_modified = datetime.datetime.fromtimestamp(os.path.getmtime(filename))
+    return (now - file_modified).days < 1
+
+# remove the files in ply_files if a pkl file with the same name exists and it has been modified in the last 24 hours
+ply_files = [filename for filename in ply_files if not file_is_recent(filename.replace(".pcd", ".pkl"))]
+# remove the first filename
+# ply_files = ply_files[1:]
+
+total_files = len(ply_files)
+
+threshold = 0.02
+repetitions = 10
+# repetitions = 3
+iterations_list = [100, 200, 300, 400, 500, 600]
+# iterations_list = [100, 200]
+percentage_chosen_lines = 0.2
+percentage_chosen_planes = 0.05
+seed = 42
+
+for index, filename in enumerate(ply_files):
+    filename_only_file = os.path.basename(filename)
+    inherited_verbose_string = f"filename {index+1} of {total_files}: {filename_only_file}"
+    dict_results = experiments.get_data_comparison_ransac_and_ransaclp(filename = filename, repetitions = repetitions, 
+                                                                   iterations_list = iterations_list, threshold = threshold, 
+                                                                   cuda = False,
+                                                                    percentage_chosen_lines = percentage_chosen_lines, 
+                                                                    percentage_chosen_planes = percentage_chosen_planes, 
+                                                                    verbosity_level = 1,
+                                                                    inherited_verbose_string = inherited_verbose_string,
+                                                                    seed = seed)
+    
+    # save the results as a pickle file in the same folder as the filename file; to do so, just change the extension of the file to pkl
+    filename_pkl = filename.replace(".pcd", ".pkl")
+    # filename is in the form '/root/open3d_data/extract/OfficePointClouds/cloud_bin_51.ply'; convert it to "/tmp/cloud_bin_51.pkl"
+    # filename_pkl = filename_pkl.split("/")[-1]
+    # filename_pkl = "/tmp/" + filename_pkl
+    with open(filename_pkl, 'wb') as f:
+        pkl.dump(dict_results, f)
+
+

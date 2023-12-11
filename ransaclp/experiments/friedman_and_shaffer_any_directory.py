@@ -9,8 +9,8 @@ import seaborn as sns
 from matplotlib.colors import ListedColormap
 from rsaitehu import stats
 
-results_path = "/home/scpmaotj/Github/mrdja/results_experiments_ransaclp/Open3D"
-image_filename = "shaffer_open3d.png"
+results_path = "/home/scpmaotj/Github/ransaclp/ransaclp/results_experiments_ransaclp/Tecnalia/"
+image_filename = "shaffer_tecnalia.png"
 # results_path = "/home/scpmaotj/Github/mrdja/results_experiments_ransaclp/S3DIS" 
 # image_filename = "shaffer_s3dis.png"
 pkl_files = glob.glob(results_path + "/**/*.pkl", recursive=True)

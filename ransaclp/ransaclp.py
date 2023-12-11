@@ -8,6 +8,8 @@ import numpy as np
 import random
 from typing import Callable, List, Tuple, Union, Dict
 from numba import cuda
+import psutil
+import os
 
 def segment_plane(pcd: o3d.geometry.PointCloud, distance_threshold: float, num_iterations: int, 
                   percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float  = 0.05, 
@@ -784,14 +786,28 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
                                                     threshold = threshold,
                                                     verbosity_level = verbosity_level, 
                                                     inherited_verbose_string=inherited_verbose_string, seed = seed)
+    process = psutil.Process(os.getpid())
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 1 Memory usage: {memory_usage} GB", flush=True)
     pair_lines_number_inliers = get_lines_and_number_inliers_from_ransac_data_from_file(ransac_data)
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 2 Memory usage: {memory_usage} GB", flush=True)
     ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = percentage_chosen_lines, verbosity_level=verbosity_level,
                                                         inherited_verbose_string=inherited_verbose_string)
-    percentile = percentage_chosen_planes * 100,
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 3 Memory usage: {memory_usage} GB", flush=True)
+    percentile = percentage_chosen_planes * 100
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 4 Memory usage: {memory_usage} GB", flush=True)
     list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = percentile)
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 5 Memory usage: {memory_usage} GB", flush=True)
     list_good_planes = [sse_plane[1] for sse_plane in list_sse_plane_05]
+    print(f"Number of good planes: {len(list_good_planes)}", flush=True)
     if use_cuda: 
         results_from_best_plane = ransaccuda.get_best_fitting_data_from_list_planes_cuda(np_points, list_good_planes, threshold)
     else:
         results_from_best_plane = ransac.get_best_fitting_data_from_list_planes(np_points, list_good_planes, threshold)
+    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
+    print(f"get_ransaclp_data_from_np_points 6 Memory usage: {memory_usage} GB", flush=True)
     return results_from_best_plane, ransac_data
