@@ -1,15 +1,15 @@
-from rsaitehu import ransac
-from rsaitehu import ransaccuda
-from rsaitehu import pointcloud
-from rsaitehu import geometry as geom
-from rsaitehu import sampling as sampling
+# import sys
+# sys.path.append('/home/scpmaotj/Github/ransaclp/ransaclp')
+
+from . import ransac
+from . import ransaccuda
+from . import pointcloud # ok
+from . import geometry as geom # ok
+from . import sampling # ok
 import open3d as o3d
 import numpy as np
-import random
-from typing import Callable, List, Tuple, Union, Dict
+from typing import Callable, List, Tuple, Dict
 from numba import cuda
-import psutil
-import os
 
 def segment_plane(pcd: o3d.geometry.PointCloud, distance_threshold: float, num_iterations: int, 
                   percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float  = 0.05, 
@@ -97,7 +97,7 @@ def get_ransac_data_from_np_points(np_points: np.ndarray, ransac_iterator: Calla
         >>> import open3d as o3d
         >>> import numpy as np
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = ransac.get_ransac_line_iteration_results
@@ -202,7 +202,7 @@ def get_ransac_data_from_np_points_cuda(np_points: np.ndarray, ransac_iterator: 
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransaccuda
+        >>> import ransaccuda
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = ransaccuda.get_ransac_line_iteration_results_cuda
@@ -341,7 +341,7 @@ def get_ransac_data_from_filename(filename: str, ransac_iterator: Callable, rans
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = ransac.get_ransac_line_iteration_results
@@ -464,7 +464,7 @@ def get_lines_and_number_inliers_ordered_by_number_inliers(ransac_data: Dict) ->
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = ransac.get_ransac_line_iteration_results
@@ -526,7 +526,7 @@ def get_ordered_list_sse_plane(pair_lines_number_inliers:List[Tuple[np.ndarray, 
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = coreransac.get_ransac_line_iteration_results
@@ -592,7 +592,7 @@ def get_n_percentile_from_list_sse_plane(list_sse_plane: List[Tuple[float, np.nd
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterator = ransac.get_ransac_line_iteration_results
@@ -667,7 +667,7 @@ def get_ransaclp_data_from_filename(filename: str, ransac_iterations: int = 100,
 
         >>> import open3d as o3d
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterations = 200
@@ -686,10 +686,6 @@ def get_ransaclp_data_from_filename(filename: str, ransac_iterations: int = 100,
         >>> inlier_cloud = pcd.select_by_index(indices_inliers)
         >>> inlier_cloud.paint_uniform_color([1, 0, 0])
         >>> o3d.visualization.draw_geometries([pcd, inlier_cloud], window_name="RANSACLP Inliers:  " + str(number_inliers))
-
-    |ransaclp_get_ransaclp_data_from_filename_example|
-
-    .. |ransaclp_get_ransaclp_data_from_filename_example| image:: ../../_static/images/ransaclp_get_ransaclp_data_from_filename_example.png
 
     '''
     if seed is not None:
@@ -743,7 +739,7 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
         >>> import open3d as o3d
         >>> import numpy as np
         >>> import ransaclp
-        >>> from rsaitehu import ransac
+        >>> import ransac
         >>> office_dataset = o3d.data.OfficePointClouds()
         >>> office_filename = office_dataset.paths[0]
         >>> ransac_iterations = 200
@@ -765,10 +761,6 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
         >>> inlier_cloud.paint_uniform_color([1, 0, 0])
         >>> o3d.visualization.draw_geometries([pcd, inlier_cloud], window_name="RANSACLP Inliers:  " + str(number_inliers))
 
-    |ransaclp_get_ransaclp_data_from_filename_example|
-
-    .. |ransaclp_get_ransaclp_data_from_filename_example| image:: ../../_static/images/ransaclp_get_ransaclp_data_from_filename_example.png
-
     '''
     if seed is not None:
         np.random.seed(seed)
@@ -786,28 +778,15 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
                                                     threshold = threshold,
                                                     verbosity_level = verbosity_level, 
                                                     inherited_verbose_string=inherited_verbose_string, seed = seed)
-    process = psutil.Process(os.getpid())
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 1 Memory usage: {memory_usage} GB", flush=True)
+
     pair_lines_number_inliers = get_lines_and_number_inliers_from_ransac_data_from_file(ransac_data)
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 2 Memory usage: {memory_usage} GB", flush=True)
     ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = percentage_chosen_lines, verbosity_level=verbosity_level,
                                                         inherited_verbose_string=inherited_verbose_string)
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 3 Memory usage: {memory_usage} GB", flush=True)
     percentile = percentage_chosen_planes * 100
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 4 Memory usage: {memory_usage} GB", flush=True)
     list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = percentile)
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 5 Memory usage: {memory_usage} GB", flush=True)
     list_good_planes = [sse_plane[1] for sse_plane in list_sse_plane_05]
-    print(f"Number of good planes: {len(list_good_planes)}", flush=True)
     if use_cuda: 
         results_from_best_plane = ransaccuda.get_best_fitting_data_from_list_planes_cuda(np_points, list_good_planes, threshold)
     else:
         results_from_best_plane = ransac.get_best_fitting_data_from_list_planes(np_points, list_good_planes, threshold)
-    memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-    print(f"get_ransaclp_data_from_np_points 6 Memory usage: {memory_usage} GB", flush=True)
     return results_from_best_plane, ransac_data

@@ -1,13 +1,8 @@
-import os
-import subprocess
+
 import pickle
 import pandas as pd
-import numpy as np
 import glob
-import matplotlib.pyplot as plt
-import seaborn as sns
-from matplotlib.colors import ListedColormap
-from rsaitehu import stats
+from . import stats
 
 results_path = "/home/scpmaotj/Github/ransaclp/ransaclp/results_experiments_ransaclp/Tecnalia/"
 image_filename = "shaffer_tecnalia.png"

@@ -3,14 +3,11 @@ from rsaitehu import pointcloud
 from rsaitehu import ransac
 from rsaitehu import geometry as geom
 from rsaitehu import drawing
-# import mrdja.ransac.coreransaccuda as coreransaccuda
 from typing import Dict, List, Tuple
 import numpy as np
 import open3d as o3d
 import glob
 import pickle as pkl
-import psutil
-import os
 
 def compute_parameters_ransac_line (line_iterations: int, percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float = 0.05) -> Dict:
     '''
@@ -202,9 +199,7 @@ def get_data_comparison_ransac_and_ransaclp(filename: str,
         
         for j in range(repetitions):
             current_repetition = current_repetition + 1
-            process = psutil.Process(os.getpid())
-            memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-            inherited_verbose_string_in_second_loop = f"{inherited_verbose_string_in_first_loop} Repetition {current_repetition}/{repetitions} Memory usage {memory_usage:.2f} GB"
+            inherited_verbose_string_in_second_loop = f"{inherited_verbose_string_in_first_loop} Repetition {current_repetition}/{repetitions}"
             # if index == 0:
             ransaclp_best_data, ransaclp_full_data = ransaclp.get_ransaclp_data_from_np_points(np_points, ransac_iterations = num_iterations, 
                                                            threshold = threshold,
@@ -225,37 +220,17 @@ def get_data_comparison_ransac_and_ransaclp(filename: str,
             dict_line_RANSAC_results_list.append(dict_line_RANSAC_results)
             dict_standard_RANSAC_results_list.append(dict_standard_RANSAC_results)
 
-        process = psutil.Process(os.getpid())
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"1 Memory usage {memory_usage:.2f} GB", flush=True)
         dict_all_results["standard_RANSAC_" + str(total_iterations)] = dict_standard_RANSAC_results_list
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"2 Memory usage {memory_usage:.2f} GB")
         dict_all_results["line_RANSAC_" + str(total_iterations)] = dict_line_RANSAC_results_list
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"3 Memory usage {memory_usage:.2f} GB")
         # get the mean of n_inliers_maximum of the elements of the list dict_line_RANSAC_results_list
         list_n_inliers_maximum = [int(dict_line_RANSAC_results["number_inliers"]) for dict_line_RANSAC_results in dict_line_RANSAC_results_list]
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"4 Memory usage {memory_usage:.2f} GB")
         mean_n_inliers_maximum = np.mean(list_n_inliers_maximum)
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"5 Memory usage {memory_usage:.2f} GB")
         dict_all_results["mean_number_inliers_line_RANSAC_" + str(total_iterations)] = mean_n_inliers_maximum
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"6 Memory usage {memory_usage:.2f} GB")
         # get the mean of n_inliers_maximum of the elements of the list dict_standard_RANSAC_results_list
         list_n_inliers_maximum = [int(dict_standard_RANSAC_results["number_inliers"]) for dict_standard_RANSAC_results in dict_standard_RANSAC_results_list]
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"7 Memory usage {memory_usage:.2f} GB")
         mean_n_inliers_maximum = np.mean(list_n_inliers_maximum)
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"8 Memory usage {memory_usage:.2f} GB")
         dict_all_results["mean_number_inliers_standard_RANSAC_" + str(total_iterations)] = mean_n_inliers_maximum
-        memory_usage = process.memory_info().rss / (1024 * 1024 * 1024)  # Convert bytes to gigabytes
-        print(f"9 Memory usage {memory_usage:.2f} GB")
 
-    print("I finished")
     return dict_all_results
 
 def extract_inliers_outliers_plane_pcd_from_pkl_filename(filename_pkl: str, filename_pcd: str, algorithm: str, iteration: int):
