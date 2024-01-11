@@ -23,6 +23,7 @@ dependencies = [
   "open3d>=0.16.0",
   "rsaitehu>=0.0.1",
   "rsaitehu-ransaccuda>=0.0.1",
+  "psutil>=5.9.0",
 ]
 
 [project.urls]
