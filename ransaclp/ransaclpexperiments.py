@@ -1,8 +1,8 @@
 import ransaclp 
-from rsaitehu import pointcloud
-from rsaitehu import ransac
-from rsaitehu import geometry as geom
-from rsaitehu import drawing
+from . import pointcloud
+from . import ransac
+from . import geometry as geom
+from . import drawing
 from typing import Dict, List, Tuple
 import numpy as np
 import open3d as o3d
