@@ -1,6 +1,3 @@
-# import sys
-# sys.path.append('/home/scpmaotj/Github/ransaclp/ransaclp')
-
 from . import ransac
 from . import ransaccuda
 from . import pointcloud # ok
