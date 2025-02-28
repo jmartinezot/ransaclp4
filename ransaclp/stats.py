@@ -53,7 +53,7 @@ def to_image_custom(df_original, df_heatmap_data, filename, df_p_values = None):
         sns.heatmap(df_heatmap_data, fmt="d", linewidths=.5, cbar=False, cmap=cmap, xticklabels=col_labels, yticklabels=row_labels)
     # save the figure
     plt.savefig(filename, bbox_inches='tight')
-    plt.show()
+    # plt.show()
 
 def rankMatrix(data, decreasing=True):
     def rank_rows(row):

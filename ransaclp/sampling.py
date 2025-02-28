@@ -2,7 +2,7 @@ import numpy as np
 from typing import List, Optional, Union
 import open3d as o3d
 
-
+#@profile
 def sampling_np_arrays_from_enumerable(source_list: Union[List, np.ndarray], cardinality_of_np_arrays: int, number_of_np_arrays: int=1, num_source_elems: Optional[int] = None, seed: Optional[int] = None) -> List[np.ndarray]:
     """
     Returns a list with **number_of_np_arrays** numpy arrays of size **cardinality_of_np_arrays** with random elements from a list or numpy array.
@@ -50,7 +50,8 @@ def sampling_np_arrays_from_enumerable(source_list: Union[List, np.ndarray], car
         num_source_elems = len(source_list)
     if seed is not None:
         np.random.seed(seed)
-    random_elems_indices = np.random.choice(range(num_source_elems), size= cardinality_of_np_arrays * number_of_np_arrays, replace=False)
+    population = np.arange(num_source_elems)
+    random_elems_indices = np.random.choice(population, size= cardinality_of_np_arrays * number_of_np_arrays, replace=False)
     random_elems = np.array(source_list)[random_elems_indices]
     # Split random_elems into sets
     sampled_np_arrays = [random_elems[i * cardinality_of_np_arrays:(i + 1) * cardinality_of_np_arrays] for i in range(number_of_np_arrays)]

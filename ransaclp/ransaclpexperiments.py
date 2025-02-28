@@ -8,6 +8,8 @@ import numpy as np
 import open3d as o3d
 import glob
 import pickle as pkl
+import time
+from rsaitehu_ransac import find_plane_inliers
 
 def compute_parameters_ransac_line (line_iterations: int, percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float = 0.05) -> Dict:
     '''
@@ -124,10 +126,212 @@ def get_baseline_S3DIS(database_path: str, threshold: float, n_iterations = 1000
 
     return dict_all_results
 
-# @profile
+import time
+import numpy as np
+import open3d as o3d
+from typing import Dict, List
+from . import pointcloud
+from . import ransac
+import ransaclp  # your ransaclp module
+
+#@profile
+def get_data_comparison_ransac_ransaclp_and_planar_patches(
+        filename: str, 
+        repetitions: int, 
+        iterations_list: List[int], 
+        threshold: float, 
+        percentage_chosen_lines: float, 
+        percentage_chosen_planes: float, 
+        max_threads_per_block: int,
+        cuda: bool = False, 
+        verbosity_level: int = 0, 
+        inherited_verbose_string: str = "",
+        seed: int = None) -> Dict:
+    """
+    Run a comparison of three segmentation methods on a point cloud file:
+      1. Standard RANSAC (Open3D)
+      2. RANSACLP (your custom method)
+      3. Planar Patches Detection (Open3D)
+
+    For each iteration level (given by iterations_list), repetitions of standard RANSAC
+    and RANSACLP are run. In addition, planar patches detection is performed once.
+    
+    Returns a dictionary containing:
+      - For each iteration level: lists of dictionaries for standard RANSAC and RANSACLP results
+        (including number of inliers, plane model, and execution time).
+      - A summary of the planar patches detection: the patch with the maximum inliers,
+        its plane model, inliers count, and execution time.
+    
+    :param filename: Path to the input point cloud file.
+    :param repetitions: Number of repetitions per iteration level.
+    :param iterations_list: List of iteration numbers to be tested (sorted in descending order).
+    :param threshold: Distance threshold used for segmentation.
+    :param percentage_chosen_lines: Percentage used to compute parameters for RANSACLP.
+    :param percentage_chosen_planes: Percentage used to compute parameters for RANSACLP.
+    :param max_threads_per_block: Cached maximum threads per block for CUDA.
+    :param cuda: Whether to use CUDA (for RANSACLP).
+    :param verbosity_level: Verbosity level for logging.
+    :param inherited_verbose_string: A prefix string for logging messages.
+    :param seed: Random seed.
+    :return: Dictionary with results for standard RANSAC, RANSACLP, and planar patches.
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    dict_all_results = {}
+    dict_all_results["filename"] = filename
+
+    # Load and sanitize point cloud.
+    pcd = o3d.io.read_point_cloud(filename)
+    pcd = pointcloud.pointcloud_sanitize(pcd)
+    np_points = np.asarray(pcd.points)
+    dict_all_results["number_pcd_points"] = len(np_points)
+    dict_all_results["threshold"] = threshold
+
+    # Ensure iterations_list is in descending order.
+    iterations_list.sort(reverse=True)
+    
+    # For each iteration level, run standard RANSAC and RANSACLP.
+    for index, num_iterations in enumerate(iterations_list):
+        verbose_prefix = f"{inherited_verbose_string} Current max RANSAC iterations {num_iterations} ({index+1}/{len(iterations_list)})"
+        if verbosity_level > 0:
+            print(f"{verbose_prefix}  -- iterations: {num_iterations}")
+
+        # Compute experiment parameters.
+        parameters_experiment = ransaclp.ransaclpexperiments.compute_parameters_ransac_line(
+            num_iterations, 
+            percentage_chosen_lines=percentage_chosen_lines, 
+            percentage_chosen_planes=percentage_chosen_planes
+        )
+        total_iterations = parameters_experiment["total_iterations"]
+
+        standard_results_list = []
+        ransaclp_results_list = []
+        times_standard = []
+        times_line = []
+
+        # Run repetitions.
+        for rep in range(repetitions):
+            rep_verbose = f"{verbose_prefix} Repetition {rep+1}/{repetitions}"
+            # RANSACLP segmentation.
+            start_time = time.perf_counter()
+            ransaclp_best_data, _ = ransaclp.get_ransaclp_data_from_np_points(
+                np_points,
+                max_threads_per_block=max_threads_per_block,
+                ransac_iterations=num_iterations,
+                threshold=threshold,
+                use_cuda=cuda,
+                verbosity_level=verbosity_level,
+                inherited_verbose_string=rep_verbose,
+                seed=None  # or use seed if desired
+            )
+            time_line = time.perf_counter() - start_time
+            ransaclp_inliers = ransaclp_best_data["number_inliers"]
+            ransaclp_plane = ransaclp_best_data["plane"]
+
+            # Standard RANSAC segmentation (using Open3D).
+            start_time = time.perf_counter()
+            plane_model, inliers = pcd.segment_plane(
+                distance_threshold=threshold,
+                ransac_n=3,
+                num_iterations=total_iterations
+            )
+            time_standard = time.perf_counter() - start_time
+            standard_inliers = len(inliers)
+
+            standard_results_list.append({
+                "number_inliers": standard_inliers,
+                "plane": plane_model,
+                "plane_iterations": total_iterations,
+                "time": time_standard
+            })
+            ransaclp_results_list.append({
+                "number_inliers": ransaclp_inliers,
+                "plane": ransaclp_plane,
+                "line_iterations": num_iterations,
+                "time": time_line
+            })
+            times_standard.append(time_standard)
+            times_line.append(time_line)
+        
+        # Store the results for this iteration level.
+        key_standard = "standard_RANSAC_" + str(total_iterations)
+        key_line = "line_RANSAC_" + str(total_iterations)
+        dict_all_results[key_standard] = standard_results_list
+        dict_all_results[key_line] = ransaclp_results_list
+
+        # Summary timing info.
+        dict_all_results["median_time_standard_RANSAC_" + str(total_iterations)] = np.median(times_standard)
+        dict_all_results["median_time_line_RANSAC_" + str(total_iterations)] = np.median(times_line)
+        dict_all_results["mean_time_standard_RANSAC_" + str(total_iterations)] = np.mean(times_standard)
+        dict_all_results["mean_time_line_RANSAC_" + str(total_iterations)] = np.mean(times_line)
+
+        # Mean inlier counts.
+        mean_inliers_standard = np.mean([res["number_inliers"] for res in standard_results_list])
+        mean_inliers_line = np.mean([res["number_inliers"] for res in ransaclp_results_list])
+        dict_all_results["mean_number_inliers_standard_RANSAC_" + str(total_iterations)] = mean_inliers_standard
+        dict_all_results["mean_number_inliers_line_RANSAC_" + str(total_iterations)] = mean_inliers_line
+
+    # --- Planar Patches Detection Section ---
+    # Run planar patches detection once (independent of iterations_list).
+    if verbosity_level > 0:
+        print(f"{inherited_verbose_string} Running planar patches detection...")
+    if not pcd.has_normals():
+        pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=30))
+    start_time = time.perf_counter()
+    try:
+        patches = pcd.detect_planar_patches(
+            normal_variance_threshold_deg=60,
+            coplanarity_deg=75,
+            outlier_ratio=0.75,
+            min_plane_edge_length=0.0,
+            min_num_points=0,
+            search_param=o3d.geometry.KDTreeSearchParamKNN(knn=30)
+        )
+    except RuntimeError as e:
+        print("Planar patches detection failed due to a Qhull error:")
+        print(e)
+        patches = []  # set to empty so that subsequent processing can continue
+
+    patches_time = time.perf_counter() - start_time
+    if verbosity_level > 0:
+        print(f"Planar patches detection took {patches_time:.4f} seconds, detected {len(patches)} patches.")
+    
+    # For each detected patch, compute a plane model and its inliers.
+    np_points = np.asarray(pcd.points)
+    patch_results = []
+    for i, patch in enumerate(patches):
+        center = patch.center
+        normal = patch.R[:, 2]  # use the third column as the normal
+        d_val = -np.dot(normal, center)
+        plane_model = [normal[0], normal[1], normal[2], d_val]
+        # Use your external function to compute inliers (assumed available in ransac module)
+        count, _ = find_plane_inliers(np_points, plane_model, np.float32(threshold))
+        patch_results.append({
+            "patch_index": i,
+            "plane": plane_model,
+            "number_inliers": count
+        })
+    # Select the patch with the maximum inliers.
+    if patch_results:
+        best_patch = max(patch_results, key=lambda x: x["number_inliers"])
+    else:
+        best_patch = None
+    dict_all_results["planar_patches"] = {
+        "detection_time": patches_time,
+        "number_of_patches": len(patches),
+        "best_patch": best_patch,
+        "all_patches": patch_results
+    }
+    
+    return dict_all_results
+
+
+#@profile
 def get_data_comparison_ransac_and_ransaclp(filename: str, 
                                             repetitions: int, iterations_list: List[int], threshold: float, 
                                             percentage_chosen_lines: float, percentage_chosen_planes: float, 
+                                            max_threads_per_block: int,
                                             cuda: bool = False, verbosity_level: int = 0, 
                                             inherited_verbose_string: str = "",
                                             seed: int = None) -> Dict :
@@ -194,6 +398,9 @@ def get_data_comparison_ransac_and_ransaclp(filename: str,
 
         dict_standard_RANSAC_results_list = list()
         dict_line_RANSAC_results_list = list()
+        # Lists to record execution times for each repetition.
+        times_standard_RANSAC = []
+        times_line_RANSAC = []
 
         current_repetition = 0
         
@@ -201,35 +408,52 @@ def get_data_comparison_ransac_and_ransaclp(filename: str,
             current_repetition = current_repetition + 1
             inherited_verbose_string_in_second_loop = f"{inherited_verbose_string_in_first_loop} Repetition {current_repetition}/{repetitions}"
             # if index == 0:
-            ransaclp_best_data, ransaclp_full_data = ransaclp.get_ransaclp_data_from_np_points(np_points, ransac_iterations = num_iterations, 
+            start_time = time.perf_counter()
+            ransaclp_best_data, ransaclp_full_data = ransaclp.get_ransaclp_data_from_np_points(np_points, 
+                                                            max_threads_per_block = max_threads_per_block,                                                  
+                                                           ransac_iterations = num_iterations, 
                                                            threshold = threshold,
                                                            use_cuda = cuda,
                                                            verbosity_level = verbosity_level, 
                                                            inherited_verbose_string = inherited_verbose_string_in_second_loop,
                                                            seed = None)
+            time_line = time.perf_counter() - start_time
             ransaclp_number_inliers = ransaclp_best_data["number_inliers"]
             ransaclp_plane = ransaclp_best_data["plane"]
-            
+            start_time = time.perf_counter()
             ransac_plane, inliers = pcd.segment_plane(distance_threshold=threshold,
                                                     ransac_n=3,
                                                     num_iterations=total_iterations)
+            time_standard = time.perf_counter() - start_time
             ransac_number_inliers = len(inliers)
 
-            dict_standard_RANSAC_results = {"number_inliers": ransac_number_inliers, "plane": ransac_plane, "plane_iterations": total_iterations}
-            dict_line_RANSAC_results = {"number_inliers": ransaclp_number_inliers, "plane": ransaclp_plane, "line_iterations": num_iterations}
+            dict_standard_RANSAC_results = {"number_inliers": ransac_number_inliers, "plane": ransac_plane, "plane_iterations": total_iterations, "time": time_standard}
+            dict_line_RANSAC_results = {"number_inliers": ransaclp_number_inliers, "plane": ransaclp_plane, "line_iterations": num_iterations, "time": time_line}
             dict_line_RANSAC_results_list.append(dict_line_RANSAC_results)
             dict_standard_RANSAC_results_list.append(dict_standard_RANSAC_results)
+            times_standard_RANSAC.append(time_standard)
+            times_line_RANSAC.append(time_line)
 
-        dict_all_results["standard_RANSAC_" + str(total_iterations)] = dict_standard_RANSAC_results_list
-        dict_all_results["line_RANSAC_" + str(total_iterations)] = dict_line_RANSAC_results_list
-        # get the mean of n_inliers_maximum of the elements of the list dict_line_RANSAC_results_list
-        list_n_inliers_maximum = [int(dict_line_RANSAC_results["number_inliers"]) for dict_line_RANSAC_results in dict_line_RANSAC_results_list]
-        mean_n_inliers_maximum = np.mean(list_n_inliers_maximum)
-        dict_all_results["mean_number_inliers_line_RANSAC_" + str(total_iterations)] = mean_n_inliers_maximum
-        # get the mean of n_inliers_maximum of the elements of the list dict_standard_RANSAC_results_list
-        list_n_inliers_maximum = [int(dict_standard_RANSAC_results["number_inliers"]) for dict_standard_RANSAC_results in dict_standard_RANSAC_results_list]
-        mean_n_inliers_maximum = np.mean(list_n_inliers_maximum)
-        dict_all_results["mean_number_inliers_standard_RANSAC_" + str(total_iterations)] = mean_n_inliers_maximum
+        # Store the results for this iteration level.
+        key_standard = "standard_RANSAC_" + str(total_iterations)
+        key_line = "line_RANSAC_" + str(total_iterations)
+        dict_all_results[key_standard] = dict_standard_RANSAC_results_list
+        dict_all_results[key_line] = dict_line_RANSAC_results_list
+
+        # Also store summary timing information.
+        dict_all_results["median_time_standard_RANSAC_" + str(total_iterations)] = np.median(times_standard_RANSAC)
+        dict_all_results["median_time_line_RANSAC_" + str(total_iterations)] = np.median(times_line_RANSAC)
+        dict_all_results["mean_time_standard_RANSAC_" + str(total_iterations)] = np.mean(times_standard_RANSAC)
+        dict_all_results["mean_time_line_RANSAC_" + str(total_iterations)] = np.mean(times_line_RANSAC)
+
+        # Compute mean inliers for reporting.
+        list_n_inliers_line = [int(res["number_inliers"]) for res in dict_line_RANSAC_results_list]
+        mean_n_inliers_line = np.mean(list_n_inliers_line)
+        dict_all_results["mean_number_inliers_line_RANSAC_" + str(total_iterations)] = mean_n_inliers_line
+
+        list_n_inliers_standard = [int(res["number_inliers"]) for res in dict_standard_RANSAC_results_list]
+        mean_n_inliers_standard = np.mean(list_n_inliers_standard)
+        dict_all_results["mean_number_inliers_standard_RANSAC_" + str(total_iterations)] = mean_n_inliers_standard
 
     return dict_all_results
 
@@ -403,7 +627,7 @@ def get_processing_examples(filename_pcd: str, threshold: float, iterations: int
     inherited_verbose_string = ""
     seed = 42
     ransac_iterator = ransac.get_ransac_line_iteration_results
-    ransac_data = ransaclp.get_ransac_data_from_np_points(np_points, ransac_iterator = ransac_iterator,
+    ransac_data = ransaclp_new.get_ransac_data_from_np_points(np_points, ransac_iterator = ransac_iterator,
                                                     ransac_iterations = iterations,
                                                     threshold = threshold,
                                                     verbosity_level = verbosity_level, 

@@ -7,6 +7,7 @@ import open3d as o3d
 import numpy as np
 from typing import Callable, List, Tuple, Dict
 from numba import cuda
+from numba import njit, prange
 
 def segment_plane(pcd: o3d.geometry.PointCloud, distance_threshold: float, num_iterations: int, 
                   percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float  = 0.05, 
@@ -159,7 +160,8 @@ def get_ransac_data_from_np_points(np_points: np.ndarray, ransac_iterator: Calla
     dict_full_results["ransac_best_iteration_results"] = best_iteration_results
     return dict_full_results
 
-def get_ransac_data_from_np_points_cuda(np_points: np.ndarray, ransac_iterator: Callable, ransac_iterations: int = 100, threshold: float = 0.1, 
+#@profile
+def get_ransac_data_from_np_points_cuda(np_points: np.ndarray, ransac_iterator: Callable, max_threads_per_block, ransac_iterations: int = 100, threshold: float = 0.1, 
                                   verbosity_level: int = 0, inherited_verbose_string: str = "",
                                   seed: int = None) -> Dict:
     '''
@@ -249,30 +251,79 @@ def get_ransac_data_from_np_points_cuda(np_points: np.ndarray, ransac_iterator: 
 
     max_number_inliers = 0
     best_iteration_results = None
-    current_iteration = 0
+    # current_iteration = 0
     # Extract x, y, z coordinates from np_points
     points_x = np_points[:, 0]
     points_y = np_points[:, 1]
     points_z = np_points[:, 2]
     # Convert points_x, points_y, and points_z to contiguous arrays
-    d_points_x = np.ascontiguousarray(points_x)
-    d_points_y = np.ascontiguousarray(points_y)
-    d_points_z = np.ascontiguousarray(points_z)
-    d_points_x = cuda.to_device(d_points_x)
-    d_points_y = cuda.to_device(d_points_y)
-    d_points_z = cuda.to_device(d_points_z)
+    d_points_x = cuda.to_device(np.ascontiguousarray(points_x))
+    d_points_y = cuda.to_device(np.ascontiguousarray(points_y))
+    d_points_z = cuda.to_device(np.ascontiguousarray(points_z))
     random_numbers_pairs = sampling.sampling_np_arrays_from_enumerable(np_points, cardinality_of_np_arrays=2, 
                                                                        number_of_np_arrays=ransac_iterations, 
                                                                        num_source_elems=len(np_points), seed=seed)
 
+    # Preallocate device memory for the result once (outside the loop)
+    host_results = np.zeros(ransac_iterations, dtype=np.int32)
+    d_results = cuda.to_device(host_results)
+
+    # Precompute slices for each iteration.
+    result_slices = [d_results[i:i+1] for i in range(ransac_iterations)]
+
+    # Choose a batch size (adjust as needed)
+    batch_size = 100
+
+    for batch_start in range(0, ransac_iterations, batch_size):
+        # Launch a batch of kernel calls asynchronously
+        for i in range(batch_start, min(batch_start + batch_size, ransac_iterations)):
+            current_iteration = i + 1
+            message = f"{inherited_verbose_string} Fitting line to pointcloud: Iteration {current_iteration}/{ransac_iterations}"
+            if (verbosity_level == 1 and current_iteration % 10 == 0) or verbosity_level >= 2:
+                print(message)
+
+            random_points = random_numbers_pairs[i]
+            # Each kernel call writes its output into d_results[i:i+1] (a one-element slice)
+            iteration_result = ransac_iterator(np_points,
+                            d_points_x, d_points_y, d_points_z,
+                            threshold, random_points,
+                            result_slices[i], max_threads_per_block)
+            # The returned dictionary has placeholder for "number_inliers".
+            dict_full_results["ransac_iterations_results"].append(iteration_result)
+        
+        # Synchronize once after each batch.
+        cuda.synchronize()
+
+    # Copy the full results array from device to host in one transfer.
+    host_results = d_results.copy_to_host()
+
+    # (Optional) You could update dict_full_results using host_results if needed.
+    # For example, if you want to include the number of inliers per iteration:
+    for i in range(ransac_iterations):
+        dict_full_results["ransac_iterations_results"][i]["number_inliers"] = int(host_results[i])
+
+    # Now, determine the best iteration using the updated results.
+    max_inliers = -1
+    for iteration_result in dict_full_results["ransac_iterations_results"]:
+        if iteration_result["number_inliers"] > max_inliers:
+            max_inliers = iteration_result["number_inliers"]
+            best_iteration_results = iteration_result
+    
+    dict_full_results["ransac_best_iteration_results"] = best_iteration_results
+    return dict_full_results
+ 
+    '''
     for i in range(ransac_iterations):
         current_iteration += 1
         message = f"{inherited_verbose_string} Fitting line to pointcloud: Iteration {current_iteration}/{ransac_iterations}"
         if (verbosity_level == 1 and current_iteration % 10 == 0) or verbosity_level >= 2:
             print(message)
 
+        # Reset the result on device if needed, e.g., by copying a zero array
+        d_result.copy_to_device(np.array([0], dtype=np.int32))
+
         random_points = random_numbers_pairs[i]
-        dict_iteration_results = ransac_iterator(np_points, d_points_x, d_points_y, d_points_z, threshold, random_points)
+        dict_iteration_results = ransac_iterator(np_points, d_points_x, d_points_y, d_points_z, threshold, random_points, d_result)
 
         if dict_iteration_results["number_inliers"] > max_number_inliers:
             max_number_inliers = dict_iteration_results["number_inliers"]
@@ -280,6 +331,7 @@ def get_ransac_data_from_np_points_cuda(np_points: np.ndarray, ransac_iterator: 
         dict_full_results["ransac_iterations_results"].append(dict_iteration_results)
     dict_full_results["ransac_best_iteration_results"] = best_iteration_results
     return dict_full_results
+    '''
 
 
 def get_ransac_data_from_filename(filename: str, ransac_iterator: Callable, ransac_iterations: int = 100, threshold: float = 0.1, 
@@ -495,6 +547,166 @@ def get_lines_and_number_inliers_ordered_by_number_inliers(ransac_data: Dict) ->
     pair_lines_number_inliers_ordered = sorted(pair_lines_number_inliers, key=lambda pair_line_number_inliers: pair_line_number_inliers[1], reverse=True)
     return pair_lines_number_inliers_ordered
 
+@njit
+def compute_plane_from_four_points(p0, p1, p2, p3):
+    # Compute the centroid manually
+    cx = (p0[0] + p1[0] + p2[0] + p3[0]) * 0.25
+    cy = (p0[1] + p1[1] + p2[1] + p3[1]) * 0.25
+    cz = (p0[2] + p1[2] + p2[2] + p3[2]) * 0.25
+
+    # Compute shifted points
+    s0 = (p0[0] - cx, p0[1] - cy, p0[2] - cz)
+    s1 = (p1[0] - cx, p1[1] - cy, p1[2] - cz)
+    s2 = (p2[0] - cx, p2[1] - cy, p2[2] - cz)
+    s3 = (p3[0] - cx, p3[1] - cy, p3[2] - cz)
+
+    # Compute covariance matrix (symmetric 3x3)
+    cov = np.zeros((3, 3))
+    for s in (s0, s1, s2, s3):
+        cov[0, 0] += s[0] * s[0]
+        cov[0, 1] += s[0] * s[1]
+        cov[0, 2] += s[0] * s[2]
+        cov[1, 1] += s[1] * s[1]
+        cov[1, 2] += s[1] * s[2]
+        cov[2, 2] += s[2] * s[2]
+    cov[1, 0] = cov[0, 1]
+    cov[2, 0] = cov[0, 2]
+    cov[2, 1] = cov[1, 2]
+
+    # Use eigh for symmetric matrices; eigenvalues are returned in ascending order.
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+    # Normal is the eigenvector corresponding to the smallest eigenvalue.
+    normal = eigenvectors[:, 0]
+
+    # Compute plane offset d: for plane defined as n·x + d = 0, d = -n·centroid
+    d = -(normal[0] * cx + normal[1] * cy + normal[2] * cz)
+    return normal, d
+
+@njit(parallel=True)
+def compute_all_planes(pair_lines, number_best, results_sse, results_plane):
+    # Assume pair_lines is a 2D array-like container of shape (n, 2, 3)
+    # where each row has two points (each point is 3D).
+    # results_sse and results_plane are preallocated arrays.
+    k = 0
+    for i in prange(number_best):
+        for j in range(i + 1, number_best):
+            # Retrieve the endpoints from the two lines.
+            # Each line is a 2x3 array.
+            line1 = pair_lines[i]
+            line2 = pair_lines[j]
+            p0 = line1[0]
+            p1 = line1[1]
+            p2 = line2[0]
+            p3 = line2[1]
+
+            normal, d = compute_plane_from_four_points(p0, p1, p2, p3)
+            
+            # Compute SSE for the 4 points
+            sse = 0.0
+            for p in (p0, p1, p2, p3):
+                err = normal[0] * p[0] + normal[1] * p[1] + normal[2] * p[2] + d
+                if err < 0:
+                    err = -err
+                sse += err * err
+
+            results_sse[k] = sse
+            # Store plane parameters as [normal_x, normal_y, normal_z, d]
+            results_plane[k, 0] = normal[0]
+            results_plane[k, 1] = normal[1]
+            results_plane[k, 2] = normal[2]
+            results_plane[k, 3] = d
+            k += 1
+
+    return k  # number of computed planes
+
+# Example usage:
+# Let's say you have 'pair_lines_number_inliers', where each element is (line, inlier_count)
+# and line is a 2x3 array. First, extract the best lines into an array.
+def prepare_pair_lines(pair_lines_number_inliers, number_best):
+    # We assume that pair_lines_number_inliers is already sorted.
+    pair_lines = np.empty((number_best, 2, 3), dtype=np.float64)
+    for i in range(number_best):
+        pair_lines[i] = pair_lines_number_inliers[i][0]
+    return pair_lines
+
+#@profile
+def get_only_best_list_sse_plane(pair_lines_number_inliers: List[Tuple[np.ndarray, int]], 
+                                      number_best: int = None, percentage_best_lines: float = 0.2, 
+                                      percentage_best_planes: float = 0.05,
+                                      already_ordered: bool = False, verbosity_level: int = 0, 
+                                      inherited_verbose_string: str = "") -> List[Tuple[float, np.ndarray]]:
+    # Determine how many candidates to process
+    if number_best is None:
+        number_best = int(len(pair_lines_number_inliers) * percentage_best_lines)
+    
+    # Optionally sort if not already sorted
+    if not already_ordered:
+        pair_lines_number_inliers = sorted(pair_lines_number_inliers, key=lambda x: x[1], reverse=True)
+    
+    # Extract candidate lines: shape (number_best, 2, 3)
+    candidate_lines = np.array([item[0] for item in pair_lines_number_inliers[:number_best]])
+    
+    # Number of candidate pairs: we need all unique combinations i<j.
+    n = candidate_lines.shape[0]
+    # Get indices of the upper triangle (excluding diagonal)
+    i_idx, j_idx = np.triu_indices(n, k=1)
+    
+    # For each pair, get the endpoints
+    # Each candidate line is 2x3; for pair (i,j), the four points are:
+    #   p0, p1 from candidate_lines[i] and p2, p3 from candidate_lines[j]
+    pts0 = candidate_lines[i_idx, 0, :]  # shape (n_pairs, 3)
+    pts1 = candidate_lines[i_idx, 1, :]  # shape (n_pairs, 3)
+    pts2 = candidate_lines[j_idx, 0, :]  # shape (n_pairs, 3)
+    pts3 = candidate_lines[j_idx, 1, :]  # shape (n_pairs, 3)
+    
+    # Stack the four points for each pair to get an array of shape (n_pairs, 4, 3)
+    points = np.stack([pts0, pts1, pts2, pts3], axis=1)
+    
+    # Compute the centroid for each set of 4 points (shape: (n_pairs, 3))
+    centroids = points.mean(axis=1)
+    
+    # Compute shifted points: subtract the centroid from each point
+    shifted_points = points - centroids[:, None, :]
+    
+    # Perform a stacked SVD: one SVD per (4, 3) matrix.
+    # Using full_matrices=False gives U: (n_pairs, 4, 3), s: (n_pairs, 3), Vh: (n_pairs, 3, 3)
+    _, _, Vh = np.linalg.svd(shifted_points, full_matrices=False)
+    
+    # The plane normal corresponds to the singular vector associated with the smallest singular value.
+    # Vh has shape (n_pairs, 3, 3); we take the last row from each SVD.
+    normals = Vh[:, 2, :]  # shape (n_pairs, 3)
+    
+    # Compute plane offset d for each pair: d = - normal dot centroid
+    d = -np.einsum('ij,ij->i', normals, centroids)  # shape (n_pairs,)
+    
+    # Compute errors for each of the four original points:
+    # For each pair, compute dot product for each of the 4 points:
+    errors = np.abs(np.einsum('ik,ijk->ij', normals, points) + d[:, None])
+    
+    # Sum of squared errors (SSE) for each pair
+    sse = np.sum(errors ** 2, axis=1)
+    
+    # Build plane arrays: each plane is [normal_x, normal_y, normal_z, d]
+    planes = np.hstack([normals, d[:, None]])  # shape (n_pairs, 4)
+
+    # Determine how many best planes to choose.
+    k = int(percentage_best_planes * len(sse))
+    if k < 1:
+        k = 1
+    
+    # Get indices of the k smallest SSE values (order not guaranteed).
+    part_idx = np.argpartition(sse, k)[:k]
+    # Fully sort these k elements.
+    best_idx = part_idx[np.argsort(sse[part_idx])]
+    
+    # Build the final list of (sse, plane) tuples.
+    list_sse_plane = [(float(sse[i]), planes[i]) for i in best_idx]
+    
+    if verbosity_level > 0:
+        print(f"{inherited_verbose_string}Selected top {k} planes out of {len(sse)} candidate pairs.")
+    
+    return list_sse_plane
+
 def get_ordered_list_sse_plane(pair_lines_number_inliers:List[Tuple[np.ndarray, int]], number_best: int = None, percentage_best: float = 0.2, 
                                already_ordered: bool = False, verbosity_level: int = 0, inherited_verbose_string: str = "") -> List[Tuple[float, np.ndarray]]:
     '''
@@ -705,8 +917,8 @@ def get_ransaclp_data_from_filename(filename: str, ransac_iterations: int = 100,
     results_from_best_plane = ransac.get_best_fitting_data_from_list_planes(np_points, list_good_planes, threshold)
     return results_from_best_plane
 
-# @profile
-def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: int = 100, threshold: float = 0.1,
+#@profile
+def get_ransaclp_data_from_np_points(np_points: np.ndarray, max_threads_per_block: int = 1024, ransac_iterations: int = 100, threshold: float = 0.1,
                                      use_cuda: bool = False, percentage_chosen_lines: float = 0.2, percentage_chosen_planes: float = 0.05,
                                     verbosity_level: int = 0, inherited_verbose_string: str = "", seed: int = None) -> Dict:
     '''
@@ -764,6 +976,7 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
     if use_cuda:
         ransac_iterator = ransaccuda.get_ransac_line_iteration_results_cuda
         ransac_data = get_ransac_data_from_np_points_cuda(np_points, ransac_iterator = ransac_iterator,
+                                            max_threads_per_block = max_threads_per_block,
                                             ransac_iterations = ransac_iterations,
                                             threshold = threshold,
                                             verbosity_level = verbosity_level, 
@@ -777,11 +990,14 @@ def get_ransaclp_data_from_np_points(np_points: np.ndarray, ransac_iterations: i
                                                     inherited_verbose_string=inherited_verbose_string, seed = seed)
 
     pair_lines_number_inliers = get_lines_and_number_inliers_from_ransac_data_from_file(ransac_data)
-    ordered_list_sse_plane = get_ordered_list_sse_plane(pair_lines_number_inliers, percentage_best = percentage_chosen_lines, verbosity_level=verbosity_level,
+    only_best_list_sse_plane = get_only_best_list_sse_plane(pair_lines_number_inliers, 
+                                                        percentage_best_lines = percentage_chosen_lines,
+                                                        percentage_best_planes=percentage_chosen_planes, 
+                                                        verbosity_level=verbosity_level,
                                                         inherited_verbose_string=inherited_verbose_string)
-    percentile = percentage_chosen_planes * 100
-    list_sse_plane_05 = get_n_percentile_from_list_sse_plane(ordered_list_sse_plane, percentile = percentile)
-    list_good_planes = [sse_plane[1] for sse_plane in list_sse_plane_05]
+    list_good_planes = [sse_plane[1] for sse_plane in only_best_list_sse_plane]
+    print("Number of good planes:", len(list_good_planes))
+    print("First good plane:", list_good_planes[0])
     if use_cuda: 
         results_from_best_plane = ransaccuda.get_best_fitting_data_from_list_planes_cuda(np_points, list_good_planes, threshold)
     else:

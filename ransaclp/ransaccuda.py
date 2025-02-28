@@ -1,14 +1,14 @@
 '''
 This module contains functions related to RANSAC and CUDA parallel processing.
 '''
-from numba import cuda
+from numba import cuda, int32, float32
 import math
 from . import sampling
 import numpy as np
 from time import time
 from typing import Tuple, List, Dict
 
-@cuda.jit
+@cuda.jit(fastmath=True)
 def __get_how_many_and_which_below_threshold_kernel(points_x: np.ndarray, points_y: np.ndarray, points_z: np.ndarray,
                                          a: float, b: float, c: float, d: float,
                                          optimized_threshold: float, point_indices: np.ndarray) -> None:
@@ -40,7 +40,7 @@ def __get_how_many_and_which_below_threshold_kernel(points_x: np.ndarray, points
         if dist <= optimized_threshold:
             point_indices[i] = 1
 
-@cuda.jit
+@cuda.jit(fastmath=True)
 def __get_how_many_below_threshold_kernel(points_x: np.ndarray, points_y: np.ndarray, points_z: np.ndarray,
                                          a: float, b: float, c: float, d: float,
                                          optimized_threshold: float, result: int) -> None:
@@ -72,8 +72,8 @@ def __get_how_many_below_threshold_kernel(points_x: np.ndarray, points_y: np.nda
         if dist <= optimized_threshold:
             cuda.atomic.add(result, 0, 1)
 
-@cuda.jit
-def __get_how_many_line_below_threshold_kernel(points_x: np.ndarray, points_y: np.ndarray, points_z: np.ndarray,
+@cuda.jit(fastmath=True)
+def __get_how_many_line_below_threshold_kernel_OLD(points_x: np.ndarray, points_y: np.ndarray, points_z: np.ndarray,
                                          line_two_points: np.ndarray,
                                          threshold: float, result: int) -> None:
     """
@@ -114,14 +114,32 @@ def __get_how_many_line_below_threshold_kernel(points_x: np.ndarray, points_y: n
         cross_product_y = V[2] * W[0] - V[0] * W[2]
         cross_product_z = V[0] * W[1] - V[1] * W[0]
         
-        magnitude_cross_product = math.sqrt(cross_product_x * cross_product_x + cross_product_y * cross_product_y + cross_product_z * cross_product_z)
-        magnitude_C_minus_B = math.sqrt((C[0] - B[0]) * (C[0] - B[0]) + (C[1] - B[1]) * (C[1] - B[1]) + (C[2] - B[2]) * (C[2] - B[2]))
+        # magnitude_cross_product = math.sqrt(cross_product_x * cross_product_x + cross_product_y * cross_product_y + cross_product_z * cross_product_z)
+        # magnitude_C_minus_B = math.sqrt((C[0] - B[0]) * (C[0] - B[0]) + (C[1] - B[1]) * (C[1] - B[1]) + (C[2] - B[2]) * (C[2] - B[2]))
         
-        dist = magnitude_cross_product / magnitude_C_minus_B
-        if dist <= threshold:
+        # dist = magnitude_cross_product / magnitude_C_minus_B
+        # if dist <= threshold:
+        #     cuda.atomic.add(result, 0, 1)
+
+        # Compute squared norm of the cross product
+        cross_norm_sq = (cross_product_x * cross_product_x +
+                         cross_product_y * cross_product_y +
+                         cross_product_z * cross_product_z)
+        
+        # Compute squared norm of (C - B)
+        W_norm_sq = ((C[0] - B[0]) * (C[0] - B[0]) +
+                     (C[1] - B[1]) * (C[1] - B[1]) +
+                     (C[2] - B[2]) * (C[2] - B[2]))
+        
+        # Instead of sqrt, we compare squared values.
+        # Condition: sqrt(cross_norm_sq / W_norm_sq) <= threshold  <==>
+        #            cross_norm_sq / W_norm_sq <= threshold^2  <==>
+        #            cross_norm_sq <= threshold^2 * W_norm_sq
+        if cross_norm_sq <= threshold * threshold * W_norm_sq:
             cuda.atomic.add(result, 0, 1)
 
-def get_how_many_below_threshold_between_line_and_points_cuda(
+#@profile
+def get_how_many_below_threshold_between_line_and_points_cuda_OLD(
     points: np.ndarray, d_points_x: np.ndarray, d_points_y: np.ndarray, d_points_z: np.ndarray,
     line_two_points: Tuple[Tuple[float, float, float], Tuple[float, float, float]], threshold: float) -> Tuple[int, List[int]]:
 
@@ -166,6 +184,91 @@ def get_how_many_below_threshold_between_line_and_points_cuda(
     cuda.synchronize()
     result = d_result.copy_to_host()[0]
     return result
+
+@cuda.jit(fastmath=True)
+def __get_how_many_line_below_threshold_kernel(points_x, points_y, points_z,
+                                               B_x, B_y, B_z, W_x, W_y, W_z,
+                                               threshold_factor, result):
+    i = cuda.grid(1)
+    if i < points_x.shape[0]:
+        # Compute vector V from point B to the current point
+        V_x = points_x[i] - B_x
+        V_y = points_y[i] - B_y
+        V_z = points_z[i] - B_z
+        
+        # Compute cross product between V and W
+        cp_x = V_y * W_z - V_z * W_y
+        cp_y = V_z * W_x - V_x * W_z
+        cp_z = V_x * W_y - V_y * W_x
+        
+        # Compute the squared norm of the cross product
+        cross_norm_sq = cp_x * cp_x + cp_y * cp_y + cp_z * cp_z
+        
+        # If the squared distance is within threshold, increment the counter
+        if cross_norm_sq <= threshold_factor:
+            cuda.atomic.add(result, 0, 1)
+
+#@profile
+def get_how_many_below_threshold_between_line_and_points_cuda(
+    points: np.ndarray,
+    d_points_x: np.ndarray, d_points_y: np.ndarray, d_points_z: np.ndarray,
+    line_two_points: tuple,
+    threshold: float,
+    d_result, # Preallocated device slice (one-element array)
+    max_threads_per_block: int # Pass the cached value here
+    ) -> int:
+    """
+    Computes the number of points that are below a threshold distance from a line using CUDA parallel processing.
+    
+    :param points: The array of points (each point is (x, y, z)).
+    :param d_points_x: The x-coordinates of the points in device memory.
+    :param d_points_y: The y-coordinates of the points in device memory.
+    :param d_points_z: The z-coordinates of the points in device memory.
+    :param line_two_points: A tuple ((x1, y1, z1), (x2, y2, z2)) defining the line.
+    :param threshold: The threshold distance.
+    :return: The number of points below the threshold distance.
+    """
+    t1 = time()
+    num_points = points.shape[0]
+    
+    # Allocate output result and move it to device memory
+    # result = np.array([0], dtype=np.int32)
+    # d_result = cuda.to_device(result)
+    
+    # Determine grid dimensions
+    threadsperblock = 1024
+    threadsperblock = min(max_threads_per_block, threadsperblock)
+    blockspergrid = math.ceil(num_points / threadsperblock)
+    t2 = time()
+    
+    # Precompute constants on the host
+    B = line_two_points[0]
+    C = line_two_points[1]
+    # Convert B to a small numpy array for the kernel
+    # B_arr = np.array(B, dtype=np.float32)
+    
+    # Compute vector W = C - B and its squared norm
+    W_x = C[0] - B[0]
+    W_y = C[1] - B[1]
+    W_z = C[2] - B[2]
+    W_norm_sq = W_x * W_x + W_y * W_y + W_z * W_z
+    
+    # Precompute the threshold factor (threshold^2 * ||W||^2)
+    threshold_factor = threshold * threshold * W_norm_sq
+    
+    B_x, B_y, B_z = B  # unpack the tuple
+    # Launch the kernel with precomputed constants
+    __get_how_many_line_below_threshold_kernel[blockspergrid, threadsperblock](
+        d_points_x, d_points_y, d_points_z,
+        B_x, B_y, B_z, W_x, W_y, W_z,
+        threshold_factor, d_result
+    )
+    t3 = time()
+    
+    # Wait for the kernel to finish and copy the result back
+    # cuda.synchronize()
+    #result = d_result.copy_to_host()[0]
+    #return result
 
 # OK
 def get_how_many_and_which_below_threshold_between_plane_and_points_and_their_indices_cuda(
@@ -265,12 +368,16 @@ def get_how_many_below_threshold_between_plane_and_points_cuda(
     result = d_result.copy_to_host()[0]
     return result
 
+#@profile
 def get_ransac_line_iteration_results_cuda(points: np.ndarray, 
                                        d_points_x: cuda.devicearray.DeviceNDArray, 
                                        d_points_y: cuda.devicearray.DeviceNDArray, 
                                        d_points_z: cuda.devicearray.DeviceNDArray, 
                                        threshold: float,
-                                       random_points: np.ndarray) -> dict:
+                                       random_points: np.ndarray,
+                                       d_result_slice,  # Preallocated device slice for this iteration
+                                       max_threads_per_block: int,
+                                       ) -> dict:
     """
     Computes the number of inliers and the plane parameters for one iteration of the RANSAC algorithm using CUDA.
 
@@ -301,10 +408,12 @@ def get_ransac_line_iteration_results_cuda(points: np.ndarray,
     else:
         current_random_points = random_points
     current_line = (tuple(current_random_points[0]), tuple(current_random_points[1]))
-    how_many_in_line = get_how_many_below_threshold_between_line_and_points_cuda(points, d_points_x, d_points_y, d_points_z, current_line, threshold)
-    return {"current_line": current_random_points, "threshold": threshold, "number_inliers": how_many_in_line}
+    get_how_many_below_threshold_between_line_and_points_cuda(points, d_points_x, d_points_y, d_points_z, current_line, threshold, d_result_slice, max_threads_per_block)
+    # Return a dictionary with the computed parameters.
+    # The actual number of inliers will be filled in later (after synchronization and copying).
+    return {"current_line": current_random_points, "threshold": threshold, "number_inliers": None}
 
-def get_fitting_data_from_list_planes_cuda(points: np.ndarray, list_planes: List[np.ndarray], threshold: float) -> List[Dict]:
+def get_fitting_data_from_list_planes_cuda_OLD(points: np.ndarray, list_planes: List[np.ndarray], threshold: float) -> List[Dict]:
     '''
     Returns the fitting data for each plane in the list of planes.
 
@@ -343,6 +452,105 @@ def get_fitting_data_from_list_planes_cuda(points: np.ndarray, list_planes: List
         list_fitting_data.append({"plane": plane, "number_inliers": how_many_in_plane})
     return list_fitting_data
 
+@cuda.jit(fastmath=True)
+def batched_plane_inlier_count(d_points_x, d_points_y, d_points_z, d_planes, threshold, d_results):
+    """
+    Each block processes one candidate plane.
+    Each thread in the block processes a subset of points.
+    """
+    candidate_idx = cuda.blockIdx.x  # Each block is one candidate
+    tid = cuda.threadIdx.x
+    block_size = cuda.blockDim.x
+    num_points = d_points_x.shape[0]
+
+    # Allocate shared memory for in-block reduction.
+    # We assume block_size is not larger than 1024.
+    shared_count = cuda.shared.array(1024, dtype=int32)
+    shared_count[tid] = 0
+    cuda.syncthreads()
+
+    # Load the candidate plane parameters.
+    # Each plane is defined by 4 coefficients: a, b, c, d.
+    a = d_planes[candidate_idx, 0]
+    b = d_planes[candidate_idx, 1]
+    c = d_planes[candidate_idx, 2]
+    d = d_planes[candidate_idx, 3]
+
+    # Iterate over the points in a strided fashion.
+    for i in range(tid, num_points, block_size):
+        # Compute distance from point i to the plane.
+        # (Optionally, adjust the threshold as in your original code.)
+        dist = math.fabs(a * d_points_x[i] + b * d_points_y[i] + c * d_points_z[i] + d)
+        if dist <= threshold:
+            shared_count[tid] += 1
+    cuda.syncthreads()
+
+    # Reduction within the block to sum inlier counts.
+    stride = block_size // 2
+    while stride > 0:
+        if tid < stride:
+            shared_count[tid] += shared_count[tid + stride]
+        cuda.syncthreads()
+        stride //= 2
+
+    # The first thread writes the candidate's result.
+    if tid == 0:
+        d_results[candidate_idx] = shared_count[0]
+
+def get_fitting_data_from_list_planes_cuda(points: np.ndarray, list_planes: List[np.ndarray], threshold: float) -> List[Dict]:
+    '''
+    Returns the fitting data for each plane in the list of planes.
+    
+    :param points: The collection of points to fit the plane to.
+    :type points: np.ndarray
+    :param list_planes: The list of planes to fit to the points.
+    :type list_planes: List[np.ndarray]
+    :param threshold: The maximum distance from a point to the plane for it to be considered an inlier.
+    :type threshold: float
+    :return: A list of dictionaries containing the plane parameters and the number of inliers.
+    :rtype: List[Dict]
+    '''
+    # Extract x, y, z coordinates from points.
+    points_x = points[:, 0]
+    points_y = points[:, 1]
+    points_z = points[:, 2]
+
+    # Ensure the coordinate arrays are contiguous and move them to device memory.
+    d_points_x = cuda.to_device(np.ascontiguousarray(points_x.astype(np.float32)))
+    d_points_y = cuda.to_device(np.ascontiguousarray(points_y.astype(np.float32)))
+    d_points_z = cuda.to_device(np.ascontiguousarray(points_z.astype(np.float32)))
+
+    # Pack the candidate planes into a single 2D array.
+    # Each plane is assumed to be a 1D array of 4 elements.
+    candidate_planes = np.vstack(list_planes).astype(np.float32)  # shape: (num_candidates, 4)
+    d_planes = cuda.to_device(candidate_planes)
+    
+    num_candidates = candidate_planes.shape[0]
+    
+    # Allocate a device array for results (one result per candidate).
+    d_results = cuda.device_array(num_candidates, dtype=np.int32)
+    
+    # Choose a block size; adjust as appropriate.
+    threadsperblock = 256
+    blockspergrid = num_candidates  # One block per candidate plane.
+    
+    # Launch the batched kernel.
+    batched_plane_inlier_count[blockspergrid, threadsperblock](d_points_x, d_points_y, d_points_z, d_planes, threshold, d_results)
+    cuda.synchronize()
+    
+    # Copy results back to the host.
+    results = d_results.copy_to_host()
+
+    # Prepare the fitting data: for each candidate plane, record its parameters and its inlier count.
+    list_fitting_data = []
+    for i in range(num_candidates):
+        list_fitting_data.append({
+            "plane": list_planes[i],  # using the original candidate from the list
+            "number_inliers": int(results[i])
+        })
+    return list_fitting_data
+
+#@profile
 def get_best_fitting_data_from_list_planes_cuda(points: np.ndarray, list_planes: List[np.ndarray], threshold: float) -> Dict:
     '''
     Returns the fitting data for the best plane in the list of planes.
